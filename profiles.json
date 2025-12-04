@@ -70,5 +70,141 @@
     "totalKills": 7,
     "totalDeaths": 8,
     "matches": 0
+  },
+  "3dc65195-83fa-4ab8-9fab-374736744d11": {
+    "id": "3dc65195-83fa-4ab8-9fab-374736744d11",
+    "nickname": "Player",
+    "class": "assault",
+    "totalKills": 1,
+    "totalDeaths": 1,
+    "matches": 0
+  },
+  "4234aafd-abc6-4b14-ade0-c3855047cce1": {
+    "id": "4234aafd-abc6-4b14-ade0-c3855047cce1",
+    "nickname": "Player",
+    "class": "assault",
+    "totalKills": 20,
+    "totalDeaths": 28,
+    "matches": 0
+  },
+  "21e566c8-39ce-44b9-8a4e-ba5d1da97910": {
+    "id": "21e566c8-39ce-44b9-8a4e-ba5d1da97910",
+    "nickname": "Player",
+    "class": "assault",
+    "totalKills": 1,
+    "totalDeaths": 5,
+    "matches": 0
+  },
+  "ee2ad3b6-f690-4866-92a3-4b20b5df9ee4": {
+    "id": "ee2ad3b6-f690-4866-92a3-4b20b5df9ee4",
+    "nickname": "Player",
+    "class": "assault",
+    "totalKills": 2,
+    "totalDeaths": 8,
+    "matches": 0
+  },
+  "70c0dc1d-1421-4730-ab9f-e943f1ebdf94": {
+    "id": "70c0dc1d-1421-4730-ab9f-e943f1ebdf94",
+    "nickname": "Player",
+    "class": "assault",
+    "totalKills": 14,
+    "totalDeaths": 16,
+    "matches": 0
+  },
+  "2beb74f5-03d1-430b-82e4-a96969648c09": {
+    "id": "2beb74f5-03d1-430b-82e4-a96969648c09",
+    "nickname": "Player",
+    "class": "assault",
+    "totalKills": 1,
+    "totalDeaths": 6,
+    "matches": 0
+  },
+  "c9c8b09e-9313-446f-a669-88f3872141af": {
+    "id": "c9c8b09e-9313-446f-a669-88f3872141af",
+    "nickname": "Player",
+    "class": "assault",
+    "totalKills": 6,
+    "totalDeaths": 3,
+    "matches": 0
+  },
+  "af948145-38cf-4bf0-a193-cce2b0ce7174": {
+    "id": "af948145-38cf-4bf0-a193-cce2b0ce7174",
+    "nickname": "Player",
+    "class": "assault",
+    "totalKills": 10,
+    "totalDeaths": 11,
+    "matches": 0
+  },
+  "308c08bf-450a-4265-98d9-0402da17ce1e": {
+    "id": "308c08bf-450a-4265-98d9-0402da17ce1e",
+    "nickname": "Player",
+    "class": "assault",
+    "totalKills": 2,
+    "totalDeaths": 3,
+    "matches": 0
+  },
+  "f188d43c-cfb9-49bc-acb0-af4506434146": {
+    "id": "f188d43c-cfb9-49bc-acb0-af4506434146",
+    "nickname": "Player",
+    "class": "assault",
+    "totalKills": 0,
+    "totalDeaths": 6,
+    "matches": 0
+  },
+  "409e8f41-5b44-44d2-b73d-adcf56412eed": {
+    "id": "409e8f41-5b44-44d2-b73d-adcf56412eed",
+    "nickname": "Player",
+    "class": "assault",
+    "totalKills": 8,
+    "totalDeaths": 9,
+    "matches": 0
+  },
+  "854f07b2-b89c-4654-862a-88bab66e8e1c": {
+    "id": "854f07b2-b89c-4654-862a-88bab66e8e1c",
+    "nickname": "Player",
+    "class": "assault",
+    "totalKills": 6,
+    "totalDeaths": 16,
+    "matches": 0
+  },
+  "ee834ee7-0aef-4a19-8fc5-fcb71edb2459": {
+    "id": "ee834ee7-0aef-4a19-8fc5-fcb71edb2459",
+    "nickname": "Player",
+    "class": "assault",
+    "totalKills": 1,
+    "totalDeaths": 1,
+    "matches": 0
+  },
+  "7f1ef2e4-f162-4ede-9f71-ad61fffc34e4": {
+    "id": "7f1ef2e4-f162-4ede-9f71-ad61fffc34e4",
+    "nickname": "Player",
+    "class": "assault",
+    "totalKills": 0,
+    "totalDeaths": 4,
+    "matches": 0
+  },
+  "233010ca-603b-4187-94d3-13b07b1f5ecc": {
+    "id": "233010ca-603b-4187-94d3-13b07b1f5ecc",
+    "nickname": "Player",
+    "class": "assault",
+    "totalKills": 7,
+    "totalDeaths": 14,
+    "matches": 0
+  },
+  "de19e1f5-cef5-4ed6-8f71-ae3d44b7b6ab": {
+    "id": "de19e1f5-cef5-4ed6-8f71-ae3d44b7b6ab",
+    "nickname": "Player",
+    "class": "assault",
+    "totalKills": 2,
+    "totalDeaths": 2,
+    "matches": 0
+  },
+  "7046c34b-a993-4a51-8c1d-7c2cc91ae974": {
+    "id": "7046c34b-a993-4a51-8c1d-7c2cc91ae974",
+    "nickname": "Player",
+    "class": "assault",
+    "totalKills": 6,
+    "totalDeaths": 4,
+    "matches": 0
   }
 }

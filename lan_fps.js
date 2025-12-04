@@ -565,7 +565,6 @@ wss.on("connection", (ws) => {
 
 setInterval(broadcastState, 50);
 
-// ================== ŠTART ==================
 server.listen(PORT, () => {
   console.log("LAN FPS 3D beží na http://localhost:" + PORT);
 });

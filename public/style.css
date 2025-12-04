@@ -457,6 +457,21 @@ button#start-btn:active {
   white-space: pre-line;
 }
 
+#map-indicator {
+  position: fixed;
+  top: 16px;
+  left: 16px;
+  background: rgba(8, 12, 20, 0.75);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  padding: 8px 12px;
+  border-radius: 12px;
+  font-weight: 700;
+  color: #e8ecff;
+  letter-spacing: 0.02em;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.25);
+  z-index: 9;
+}
+
 #killfeed {
   position: fixed;
   bottom: 80px;

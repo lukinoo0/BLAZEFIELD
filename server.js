@@ -9,19 +9,21 @@ const { randomUUID } = require("crypto");
 const PORT = process.env.PORT || 3000;
 const BROADCAST_RATE_MS = 50; // 20 fps state updates
 const BOT_THINK_MS = 200;
-const BOT_COUNT = 8;
-const WORLD_HALF_SIZE = 120; // clamp player positions
-const MAX_SHOT_RANGE = 80;
+const MAP_SCALE = 1.8;
+const BOT_COUNT = 14;
+const WORLD_HALF_SIZE = 120 * MAP_SCALE; // clamp player positions
+const MAX_SHOT_RANGE = 150;
 const HIT_RADIUS = 1.1;
 const DAMAGE = 15;
 const BOT_DAMAGE = 10;
 const BOT_SPEED = 4.2;
 const BOT_TURN_RATE = 2.5; // radians per second
 const KILL_EVENT = "killEvent";
+const DEFAULT_PRIMARY = "AssaultRifle_1";
+const DEFAULT_SECONDARY = "Pistol_1";
 
-// In-memory player store. Humans live in `clients`; bots live in `bots`.
-const clients = new Map(); // id -> { id, ws, nickname, position, rotY, hp, isBot:false }
-const bots = new Map(); // id -> { id, nickname, position, rotY, hp, isBot:true, ai }
+// Each room represents one map instance with its own players/bots.
+const rooms = new Map(); // roomId/mapId -> { id, mapId, players: Map, bots: Map, config }
 let nextId = 1;
 const botNames = [
   "Alfred",
@@ -42,6 +44,16 @@ const botNames = [
 ];
 
 // Basic map layout used on the client; boxes reused for bot spawning and line-of-sight.
+function scaleBox(box) {
+  return {
+    x: box.x * MAP_SCALE,
+    z: box.z * MAP_SCALE,
+    w: box.w * MAP_SCALE,
+    d: box.d * MAP_SCALE,
+    h: box.h * (1 + (MAP_SCALE - 1) * 0.35),
+  };
+}
+
 const buildingBoxes = [
   { x: -40, z: -10, w: 18, d: 16, h: 12 },
   { x: 30, z: -12, w: 20, d: 16, h: 12 },
@@ -54,7 +66,7 @@ const buildingBoxes = [
   { x: 52, z: 4, w: 14, d: 12, h: 10 },
   { x: 0, z: 60, w: 18, d: 14, h: 9 },
   { x: -60, z: -40, w: 16, d: 16, h: 10 },
-];
+].map(scaleBox);
 
 // Spawn points hugging building edges/entrances so bots don't cluster in the open.
 const spawnPoints = [
@@ -79,7 +91,7 @@ const spawnPoints = [
   { x: -62, z: -26 },
   { x: 22, z: 50 },
   { x: -30, z: 52 },
-];
+].map((p) => ({ x: p.x * MAP_SCALE, z: p.z * MAP_SCALE }));
 
 const app = express();
 app.use(express.static(path.join(__dirname, "public")));
@@ -179,20 +191,89 @@ const obstacleExtra = [
   { min: { x: 16, y: 0, z: -26 }, max: { x: 28, y: 5, z: -14 } },
   { min: { x: -30, y: 0, z: -30 }, max: { x: -18, y: 4, z: -18 } },
   { min: { x: 6, y: 0, z: 44 }, max: { x: 16, y: 4, z: 56 } },
-];
-const obstacles = obstacleBoxes.concat(obstacleExtra);
+].map((b) => ({
+  min: { x: b.min.x * MAP_SCALE, y: b.min.y, z: b.min.z * MAP_SCALE },
+  max: { x: b.max.x * MAP_SCALE, y: b.max.y, z: b.max.z * MAP_SCALE },
+}));
+const defaultObstacles = obstacleBoxes.concat(obstacleExtra);
+const DEFAULT_MAP_ID = "dust";
+const MAP_CONFIGS = {
+  dust: {
+    id: "dust",
+    mapId: "dust",
+    spawnPoints,
+    obstacles: defaultObstacles,
+    worldHalfSize: WORLD_HALF_SIZE,
+  },
+  mirage: {
+    id: "mirage",
+    mapId: "mirage",
+    spawnPoints,
+    obstacles: defaultObstacles,
+    worldHalfSize: WORLD_HALF_SIZE,
+  },
+  city: {
+    id: "city",
+    mapId: "city",
+    spawnPoints,
+    obstacles: defaultObstacles,
+    worldHalfSize: WORLD_HALF_SIZE,
+  },
+};
+
+function getMapConfig(mapId) {
+  return MAP_CONFIGS[mapId] || MAP_CONFIGS[DEFAULT_MAP_ID];
+}
+
+function getOrCreateRoom(mapId) {
+  const key = mapId && MAP_CONFIGS[mapId] ? mapId : DEFAULT_MAP_ID;
+  let room = rooms.get(key);
+  if (!room) {
+    room = {
+      id: key,
+      mapId: key,
+      players: new Map(),
+      bots: new Map(),
+      config: getMapConfig(key),
+    };
+    seedBots(room);
+    rooms.set(key, room);
+  }
+  return room;
+}
+
+const WEAPON_STATS = {
+  AssaultRifle_1: { damage: 28, fireDelay: 110, range: 120 },
+  AssaultRifle_2: { damage: 30, fireDelay: 130, range: 125 },
+  AssaultRifle_3: { damage: 38, fireDelay: 190, range: 135 },
+  Bullpup_1: { damage: 30, fireDelay: 120, range: 140 },
+  Bullpup_2: { damage: 32, fireDelay: 135, range: 145 },
+  Pistol_1: { damage: 14, fireDelay: 200, range: 70 },
+  Pistol_2: { damage: 16, fireDelay: 190, range: 72 },
+  Pistol_3: { damage: 18, fireDelay: 210, range: 75 },
+  Pistol_4: { damage: 20, fireDelay: 230, range: 78 },
+  Pistol_5: { damage: 22, fireDelay: 240, range: 80 },
+  Pistol_6: { damage: 24, fireDelay: 260, range: 82 },
+  Revolver_1: { damage: 60, fireDelay: 550, range: 90 },
+  Revolver_2: { damage: 70, fireDelay: 620, range: 95 },
+  Revolver_3: { damage: 80, fireDelay: 700, range: 100 },
+};
+const BOT_WEAPON_KEYS = Object.keys(WEAPON_STATS);
 
 // Utility helpers
-function randomSpawn() {
+function randomSpawn(room) {
+  const cfg = room?.config || getMapConfig(DEFAULT_MAP_ID);
+  const points = cfg.spawnPoints || spawnPoints;
+  const existing = [...(room?.players?.values() || []), ...(room?.bots?.values() || [])];
   // pick a spawn not overlapping others
   for (let tries = 0; tries < 20; tries++) {
-    const base = spawnPoints[Math.floor(Math.random() * spawnPoints.length)];
+    const base = points[Math.floor(Math.random() * points.length)];
     const candidate = { x: base.x + (Math.random() - 0.5) * 2, y: 1.6, z: base.z + (Math.random() - 0.5) * 2 };
     let ok = true;
-    for (const p of [...clients.values(), ...bots.values()]) {
+    for (const p of existing) {
       const dx = p.position.x - candidate.x;
       const dz = p.position.z - candidate.z;
-      if (dx * dx + dz * dz < 4) {
+      if (dx * dx + dz * dz < 49) {
         ok = false;
         break;
       }
@@ -200,14 +281,15 @@ function randomSpawn() {
     if (ok) return candidate;
   }
   // fallback
-  const base = spawnPoints[0];
+  const base = points[0];
   return { x: base.x, y: 1.6, z: base.z };
 }
 
-function clampPosition(pos) {
-  pos.x = Math.max(-WORLD_HALF_SIZE, Math.min(WORLD_HALF_SIZE, pos.x));
+function clampPosition(pos, room) {
+  const half = room?.config?.worldHalfSize ?? WORLD_HALF_SIZE;
+  pos.x = Math.max(-half, Math.min(half, pos.x));
   pos.y = Math.max(0.5, Math.min(8, pos.y)); // keep everyone above ground
-  pos.z = Math.max(-WORLD_HALF_SIZE, Math.min(WORLD_HALF_SIZE, pos.z));
+  pos.z = Math.max(-half, Math.min(half, pos.z));
 }
 
 function distance2(a, b) {
@@ -218,7 +300,7 @@ function distance2(a, b) {
 }
 
 // Basic segment vs AABB test to approximate line-of-sight against buildings so bots don't shoot through walls.
-function hasLineOfSight(origin, target) {
+function hasLineOfSight(origin, target, room) {
   const dir = {
     x: target.x - origin.x,
     y: (target.y || 1.6) - origin.y,
@@ -229,7 +311,8 @@ function hasLineOfSight(origin, target) {
   dir.y /= dist;
   dir.z /= dist;
 
-  for (const box of obstacles) {
+  const obs = room?.config?.obstacles || defaultObstacles;
+  for (const box of obs) {
     let tmin = 0;
     let tmax = dist;
     const axes = ["x", "y", "z"];
@@ -263,8 +346,9 @@ function hasLineOfSight(origin, target) {
   return true;
 }
 
-function collides(pos) {
-  for (const b of obstacles) {
+function collides(pos, room) {
+  const obs = room?.config?.obstacles || defaultObstacles;
+  for (const b of obs) {
     if (
       pos.x > b.min.x - HIT_RADIUS &&
       pos.x < b.max.x + HIT_RADIUS &&
@@ -298,7 +382,7 @@ function rayPointDistance(origin, dir, point) {
   return { distance: Math.sqrt(distSq), t };
 }
 
-function applyDamage(target, shooter, dmg = DAMAGE) {
+function applyDamage(target, shooter, room, dmg = DAMAGE) {
   target.hp -= dmg;
   let killed = false;
   let spawn = null;
@@ -306,7 +390,7 @@ function applyDamage(target, shooter, dmg = DAMAGE) {
   if (target.hp <= 0) {
     killed = true;
     target.hp = 100;
-    spawn = randomSpawn();
+    spawn = randomSpawn(room);
     target.position = spawn;
     target.rotY = 0;
     target.deaths = (target.deaths || 0) + 1;
@@ -326,7 +410,7 @@ function applyDamage(target, shooter, dmg = DAMAGE) {
   }
 
   if (killed && shooter) {
-    broadcastKill(shooter.id, target.id);
+    broadcastKill(room, shooter.id, target.id);
   }
 
   // Send hit confirmation back to shooter for local feedback.
@@ -349,7 +433,7 @@ function applyDamage(target, shooter, dmg = DAMAGE) {
   }
 }
 
-function raySphere(origin, dir, center, radius) {
+function raySphere(origin, dir, center, radius, maxRange = MAX_SHOT_RANGE) {
   const ox = origin.x - center.x;
   const oy = origin.y - center.y;
   const oz = origin.z - center.z;
@@ -358,12 +442,12 @@ function raySphere(origin, dir, center, radius) {
   const disc = b * b - c;
   if (disc < 0) return null;
   const t = -b - Math.sqrt(disc);
-  if (t < 0 || t > MAX_SHOT_RANGE) return null;
+  if (t < 0 || t > maxRange) return null;
   return t;
 }
 
 // Capsule centerline p1->p2 with radius r
-function rayCapsule(origin, dir, p1, p2, r) {
+function rayCapsule(origin, dir, p1, p2, r, maxRange = MAX_SHOT_RANGE) {
   // from https://iquilezles.org/articles/intersectors/ (ray vs capsule)
   const ba = { x: p2.x - p1.x, y: p2.y - p1.y, z: p2.z - p1.z };
   const oa = { x: origin.x - p1.x, y: origin.y - p1.y, z: origin.z - p1.z };
@@ -379,12 +463,12 @@ function rayCapsule(origin, dir, p1, p2, r) {
   const h = b * b - a * c;
   if (h >= 0) {
     const t = (-b - Math.sqrt(h)) / a;
-    if (t > 0 && t < MAX_SHOT_RANGE) {
+    if (t > 0 && t < maxRange) {
       const y = baoa + t * bard;
       if (y > 0 && y < baba) return t;
       // ends
-      const end1 = raySphere(origin, dir, p1, r);
-      const end2 = raySphere(origin, dir, p2, r);
+      const end1 = raySphere(origin, dir, p1, r, maxRange);
+      const end2 = raySphere(origin, dir, p2, r, maxRange);
       const tEnd = [end1, end2].filter((v) => v !== null).sort((a, b) => a - b)[0];
       if (tEnd !== undefined) return tEnd;
     }
@@ -393,7 +477,8 @@ function rayCapsule(origin, dir, p1, p2, r) {
 }
 
 // Simple raycast hit test against all players/bots with head/body damage.
-function handleShot(shooter, payload) {
+function handleShot(shooter, payload, room) {
+  if (!room) return;
   const origin = payload.origin;
   const dir = payload.dir;
   if (!origin || !dir) return;
@@ -403,18 +488,21 @@ function handleShot(shooter, payload) {
   dir.y /= len;
   dir.z /= len;
 
+  const maxRange = Math.max(1, Math.min(payload.range || MAX_SHOT_RANGE, MAX_SHOT_RANGE));
+  broadcastShotEvent(room, shooter, origin, dir);
+
   let closestTarget = null;
   let closestT = Infinity;
   let headshot = false;
-  const everyone = [...clients.values(), ...bots.values()];
+  const everyone = [...room.players.values(), ...room.bots.values()];
 
   for (const target of everyone) {
     if (target.id === shooter.id) continue;
-    const headCenter = { x: target.position.x, y: target.position.y + 0.4, z: target.position.z };
-    const bodyA = { x: target.position.x, y: target.position.y - 0.6, z: target.position.z };
-    const bodyB = { x: target.position.x, y: target.position.y + 0.6, z: target.position.z };
-    const th = raySphere(origin, dir, headCenter, 0.35);
-    const tb = rayCapsule(origin, dir, bodyA, bodyB, 0.6);
+    const headCenter = { x: target.position.x, y: target.position.y + 0.95, z: target.position.z };
+    const bodyA = { x: target.position.x, y: target.position.y - 0.9, z: target.position.z };
+    const bodyB = { x: target.position.x, y: target.position.y + 0.9, z: target.position.z };
+    const th = raySphere(origin, dir, headCenter, 0.45, maxRange);
+    const tb = rayCapsule(origin, dir, bodyA, bodyB, 0.7, maxRange);
     const tHit = th !== null && th < (tb ?? Infinity) ? { t: th, head: true } : tb !== null ? { t: tb, head: false } : null;
     if (tHit && tHit.t < closestT) {
       closestT = tHit.t;
@@ -425,14 +513,15 @@ function handleShot(shooter, payload) {
 
   if (closestTarget) {
     const mult = headshot ? 2.5 : 1;
-    applyDamage(closestTarget, shooter, (payload.damage || DAMAGE) * mult);
+    applyDamage(closestTarget, shooter, room, (payload.damage || DAMAGE) * mult);
   }
 }
 
-function broadcastState() {
+function broadcastState(room) {
   const payload = {
     type: "state",
-    players: [...clients.values(), ...bots.values()].map((p) => ({
+    mapId: room.mapId,
+    players: [...room.players.values(), ...room.bots.values()].map((p) => ({
       id: p.id,
       nickname: p.nickname || `Player${p.id}`,
       x: p.position.x,
@@ -445,19 +534,36 @@ function broadcastState() {
       deaths: p.deaths || 0,
       class: p.class,
       gamemode: p.gamemode || "ffa",
+      weapon: p.weapon || null,
     })),
   };
   const data = JSON.stringify(payload);
-  for (const player of clients.values()) {
+  for (const player of room.players.values()) {
     if (player.ws.readyState === WebSocket.OPEN) {
       player.ws.send(data);
     }
   }
 }
 
-function broadcastKill(killerId, victimId) {
+function broadcastShotEvent(room, shooter, origin, dir) {
+  const data = JSON.stringify({
+    type: "shotEvent",
+    shooterId: shooter?.id ?? null,
+    origin,
+    dir,
+    isBot: !!shooter?.isBot,
+  });
+  for (const player of room.players.values()) {
+    if (shooter && player.id === shooter.id) continue;
+    if (player.ws.readyState === WebSocket.OPEN) {
+      player.ws.send(data);
+    }
+  }
+}
+
+function broadcastKill(room, killerId, victimId) {
   const data = JSON.stringify({ type: "killEvent", killerId, victimId });
-  for (const player of clients.values()) {
+  for (const player of room.players.values()) {
     if (player.ws.readyState === WebSocket.OPEN) {
       player.ws.send(data);
     }
@@ -471,10 +577,12 @@ function sendProfile(player) {
   player.ws.send(JSON.stringify({ type: "profile", profile }));
 }
 
-function createBot(name) {
+function createBot(room, name) {
   const id = nextId++;
-  const spawn = randomSpawn();
-  bots.set(id, {
+  const spawn = randomSpawn(room);
+  const weapon = BOT_WEAPON_KEYS[Math.floor(Math.random() * BOT_WEAPON_KEYS.length)] || DEFAULT_PRIMARY;
+  const stats = WEAPON_STATS[weapon] || {};
+  room.bots.set(id, {
     id,
     nickname: name,
     position: spawn,
@@ -485,18 +593,28 @@ function createBot(name) {
     class: "assault",
     gamemode: "ffa",
     isBot: true,
+    weapon,
+    roomId: room.id,
     ai: {
       heading: Math.random() * Math.PI * 2,
       target: null,
-      shootCooldown: 800,
+      shootCooldown: stats.fireDelay || 800,
     },
   });
 }
 
-function nearestHuman(bot) {
+function seedBots(room) {
+  for (let i = 1; i <= BOT_COUNT; i++) {
+    const name = botNames[Math.floor(Math.random() * botNames.length)];
+    createBot(room, name);
+  }
+}
+
+function nearestHuman(bot, room) {
+  if (!room) return null;
   let best = null;
   let bestDistSq = Infinity;
-  for (const p of clients.values()) {
+  for (const p of room.players.values()) {
     const dx = p.position.x - bot.position.x;
     const dz = p.position.z - bot.position.z;
     const dy = p.position.y - bot.position.y;
@@ -510,16 +628,20 @@ function nearestHuman(bot) {
 }
 
 // Lightweight bot AI: wander inside the map, face the nearest human, and occasionally shoot.
-function updateBots() {
-  for (const bot of bots.values()) {
+function updateBotsForRoom(room) {
+  for (const bot of room.bots.values()) {
+    if (!bot.weapon) {
+      bot.weapon = BOT_WEAPON_KEYS[Math.floor(Math.random() * BOT_WEAPON_KEYS.length)] || DEFAULT_PRIMARY;
+    }
     const ai = bot.ai;
     const dt = BOT_THINK_MS / 1000;
+    const stats = WEAPON_STATS[bot.weapon] || { damage: BOT_DAMAGE, fireDelay: 800, range: MAX_SHOT_RANGE };
 
-    if (!ai.target || distance2(bot.position, ai.target) < 4 || collides(ai.target)) {
-      ai.target = randomSpawn();
+    if (!ai.target || distance2(bot.position, ai.target) < 4 || collides(ai.target, room)) {
+      ai.target = randomSpawn(room);
     }
 
-    const target = nearestHuman(bot);
+    const target = nearestHuman(bot, room);
     const desiredDir = ai.target
       ? Math.atan2(ai.target.x - bot.position.x, ai.target.z - bot.position.z)
       : ai.heading;
@@ -536,11 +658,11 @@ function updateBots() {
       y: bot.position.y,
       z: bot.position.z + Math.cos(ai.heading) * BOT_SPEED * dt,
     };
-    clampPosition(nextPos);
-    if (collides(nextPos)) {
+    clampPosition(nextPos, room);
+    if (collides(nextPos, room)) {
       // pick new heading away from obstacle
       ai.heading += (Math.random() > 0.5 ? 1 : -1) * Math.PI * 0.5;
-      ai.target = randomSpawn();
+      ai.target = randomSpawn(room);
     } else {
       bot.position = nextPos;
     }
@@ -551,27 +673,22 @@ function updateBots() {
       const dz = target.position.z - bot.position.z;
       const dy = target.position.y - bot.position.y;
       const distSq = dx * dx + dy * dy + dz * dz;
-      if (ai.shootCooldown <= 0 && distSq < MAX_SHOT_RANGE * MAX_SHOT_RANGE) {
+      if (ai.shootCooldown <= 0 && distSq < (stats.range || MAX_SHOT_RANGE) * (stats.range || MAX_SHOT_RANGE)) {
         const origin = { ...bot.position, y: 1.6 };
         const dir = {
           x: dx + (Math.random() - 0.5) * 0.8,
           y: dy + (Math.random() - 0.5) * 0.3,
           z: dz + (Math.random() - 0.5) * 0.8,
         };
-        if (hasLineOfSight(origin, target.position)) {
-          ai.shootCooldown = 500 + Math.random() * 400;
-          handleShot(bot, { origin, dir, damage: BOT_DAMAGE });
+        if (hasLineOfSight(origin, target.position, room)) {
+          ai.shootCooldown = stats.fireDelay + Math.random() * 120;
+          handleShot(bot, { origin, dir, damage: stats.damage || BOT_DAMAGE, range: stats.range }, room);
         } else {
-          ai.shootCooldown = 500;
+          ai.shootCooldown = stats.fireDelay;
         }
       }
     }
   }
-}
-
-for (let i = 1; i <= BOT_COUNT; i++) {
-  const name = botNames[Math.floor(Math.random() * botNames.length)];
-  createBot(name);
 }
 
 // WebSocket protocol:
@@ -580,7 +697,6 @@ for (let i = 1; i <= BOT_COUNT; i++) {
 //  - shot: { origin: {x,y,z}, dir: {x,y,z} }
 wss.on("connection", (ws) => {
   const id = nextId++;
-  const spawn = randomSpawn();
   const player = {
     id,
     ws,
@@ -588,24 +704,19 @@ wss.on("connection", (ws) => {
     class: "assault",
     gamemode: "ffa",
     profileId: null,
-    position: spawn,
+    position: { x: 0, y: 1.6, z: 0 },
     rotY: 0,
     hp: 100,
     kills: 0,
     deaths: 0,
     isBot: false,
     lastUpdate: Date.now(),
+    room: null,
+    roomId: null,
+    mapId: null,
+    loadout: { primary: DEFAULT_PRIMARY, secondary: DEFAULT_SECONDARY, melee: "knife" },
+    weapon: DEFAULT_PRIMARY,
   };
-  clients.set(id, player);
-
-  ws.send(
-    JSON.stringify({
-      type: "hello",
-      id,
-      spawn,
-      hp: player.hp,
-    })
-  );
 
   ws.on("message", (data) => {
     let msg = null;
@@ -622,6 +733,36 @@ wss.on("connection", (ws) => {
       player.class = profile.class || msg.class || "assault";
       player.gamemode = msg.gamemode || "ffa";
       player.profileId = profile.id;
+      player.loadout = {
+        primary: msg.primary || player.loadout?.primary || DEFAULT_PRIMARY,
+        secondary: msg.secondary || player.loadout?.secondary || DEFAULT_SECONDARY,
+        melee: "knife",
+      };
+      player.weapon = player.loadout.primary;
+      const desiredMap = msg.map || msg.mapId || DEFAULT_MAP_ID;
+      const room = getOrCreateRoom(desiredMap);
+      if (player.room && player.room !== room) {
+        player.room.players.delete(player.id);
+      }
+      player.room = room;
+      player.roomId = room.id;
+      player.mapId = room.mapId;
+      player.position = randomSpawn(room);
+      player.hp = 100;
+      player.rotY = 0;
+      player.kills = 0;
+      player.deaths = 0;
+      room.players.set(player.id, player);
+      ws.send(
+        JSON.stringify({
+          type: "hello",
+          id,
+          spawn: player.position,
+          hp: player.hp,
+          mapId: room.mapId,
+          weapon: player.weapon,
+        })
+      );
       sendProfile(player);
       return;
     }
@@ -636,28 +777,46 @@ wss.on("connection", (ws) => {
     }
 
     if (msg.type === "state") {
+      if (!player.room) return;
       const { x, y, z, rotY } = msg;
       if ([x, y, z, rotY].every((n) => typeof n === "number" && Number.isFinite(n))) {
         player.position = { x, y, z };
-        clampPosition(player.position);
+        clampPosition(player.position, player.room);
         player.rotY = rotY;
         player.lastUpdate = Date.now();
+      }
+      if (typeof msg.weapon === "string") {
+        player.weapon = msg.weapon;
       }
       return;
     }
 
     if (msg.type === "shot") {
-      handleShot(player, msg);
+      if (!player.room) return;
+      handleShot(player, msg, player.room);
     }
   });
 
   ws.on("close", () => {
-    clients.delete(id);
+    if (player.room) {
+      player.room.players.delete(player.id);
+    }
   });
 });
 
-setInterval(broadcastState, BROADCAST_RATE_MS);
-setInterval(updateBots, BOT_THINK_MS);
+setInterval(() => {
+  for (const room of rooms.values()) {
+    if (room.players.size > 0) {
+      broadcastState(room);
+    }
+  }
+}, BROADCAST_RATE_MS);
+setInterval(() => {
+  for (const room of rooms.values()) {
+    if (room.players.size === 0) continue;
+    updateBotsForRoom(room);
+  }
+}, BOT_THINK_MS);
 
 server.listen(PORT, () => {
   console.log(`LAN FPS server listening on http://localhost:${PORT}`);

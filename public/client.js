@@ -1,5 +1,8 @@
 import * as THREE from "./lib/three.module.js";
 import { PointerLockControls } from "./lib/PointerLockControls.js";
+import { OBJLoader } from "./lib/OBJLoader.js";
+import { MTLLoader } from "./lib/MTLLoader.js";
+import { GLTFLoader } from "./lib/GLTFLoader.js";
 
 const canvas = document.getElementById("scene");
 const startScreen = document.getElementById("main-menu");
@@ -33,8 +36,8 @@ const settings = {
 let selectedMap = mapSelect?.value || "dust";
 const primarySelect = document.getElementById("primary-select");
 const secondarySelect = document.getElementById("secondary-select");
-let selectedPrimary = primarySelect?.value || "ak";
-let selectedSecondary = secondarySelect?.value || "glock";
+let selectedPrimary = primarySelect?.value || "AssaultRifle_1";
+let selectedSecondary = secondarySelect?.value || "Pistol_1";
 const volumeSlider = document.getElementById("volume-slider");
 const musicSlider = document.getElementById("music-slider");
 const sounds = {
@@ -44,24 +47,16 @@ const sounds = {
   reload: new Audio("/sounds/reload.wav"),
   empty: new Audio("/sounds/empty.wav"),
   damage: new Audio("/sounds/damage.wav"),
-  ak: new Audio("/sounds/weapons/ak_shot.wav"),
-  akReload: new Audio("/sounds/weapons/ak_reload.wav"),
-  m4: new Audio("/sounds/weapons/m4_shot.wav"),
-  m4Reload: new Audio("/sounds/weapons/m4_reload.wav"),
-  awp: new Audio("/sounds/weapons/awp_shot.wav"),
-  awpReload: new Audio("/sounds/weapons/awp_reload.wav"),
-  mp9: new Audio("/sounds/weapons/mp9_shot.wav"),
-  mp9Reload: new Audio("/sounds/weapons/mp9_reload.wav"),
-  nova: new Audio("/sounds/weapons/nova_shot.wav"),
-  novaReload: new Audio("/sounds/weapons/nova_reload.wav"),
-  glock: new Audio("/sounds/weapons/glock_shot.wav"),
-  glockReload: new Audio("/sounds/weapons/glock_reload.wav"),
-  usp: new Audio("/sounds/weapons/usp_shot.wav"),
-  uspReload: new Audio("/sounds/weapons/usp_reload.wav"),
-  deagle: new Audio("/sounds/weapons/deagle_shot.wav"),
-  deagleReload: new Audio("/sounds/weapons/deagle_reload.wav"),
+  assault: new Audio("/sounds/ar_shot.wav"),
+  assaultReload: new Audio("/sounds/reload.wav"),
+  bullpup: new Audio("/sounds/ar_shot.wav"),
+  bullpupReload: new Audio("/sounds/reload.wav"),
+  pistol: new Audio("/sounds/pistol_shot.wav"),
+  pistolReload: new Audio("/sounds/reload.wav"),
+  revolver: new Audio("/sounds/sniper_shot.wav"),
+  revolverReload: new Audio("/sounds/reload.wav"),
 };
-const menuMusic = new Audio("/sounds/music/menu.mp3");
+const menuMusic = new Audio("/sounds/ambient.wav");
 menuMusic.loop = true;
 menuMusic.isMusic = true;
 const profileTotalKills = null;
@@ -75,6 +70,38 @@ const baseFov = 75;
 const scopedFov = 45;
 let scoped = false;
 let paused = false;
+const MAP_SCALE = 1.8;
+const WORLD_HALF_SIZE = 120 * MAP_SCALE;
+const GROUND_SIZE = WORLD_HALF_SIZE * 2 + 80;
+let audioPrimed = false;
+
+function primeAudio() {
+  if (audioPrimed) return;
+  audioPrimed = true;
+  [...Object.values(sounds), menuMusic].forEach((s) => {
+    if (!s) return;
+    try {
+      s.preload = "auto";
+      s.volume = s.isMusic ? settings.music : settings.volume;
+      s.muted = true;
+      const reset = () => {
+        s.pause();
+        s.currentTime = 0;
+        s.muted = false;
+      };
+      const p = s.play();
+      if (p && p.then) {
+        p.then(reset).catch(() => {
+          s.muted = false;
+        });
+      } else {
+        reset();
+      }
+    } catch {
+      s.muted = false;
+    }
+  });
+}
 
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -84,9 +111,9 @@ renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x0c1120);
-scene.fog = new THREE.FogExp2(0x0d1324, 0.0095);
+scene.fog = new THREE.FogExp2(0x0d1324, 0.0065);
 
-const camera = new THREE.PerspectiveCamera(baseFov, window.innerWidth / window.innerHeight, 0.1, 400);
+const camera = new THREE.PerspectiveCamera(baseFov, window.innerWidth / window.innerHeight, 0.1, 900);
 camera.position.set(0, 1.6, 8);
 
 const controls = new PointerLockControls(camera, document.body);
@@ -104,6 +131,232 @@ dir.shadow.camera.bottom = -60;
 dir.shadow.camera.left = -60;
 dir.shadow.camera.right = 60;
 scene.add(ambient, dir);
+
+function addSky() {
+  const skyGeo = new THREE.SphereGeometry(800, 32, 32);
+  const skyMat = new THREE.ShaderMaterial({
+    uniforms: {
+      topColor: { value: new THREE.Color(0x7fb7ff) },
+      bottomColor: { value: new THREE.Color(0x0a0e18) },
+      offset: { value: 20 },
+      exponent: { value: 0.8 },
+    },
+    vertexShader: `
+      varying vec3 vWorldPosition;
+      void main() {
+        vec4 worldPosition = modelMatrix * vec4(position, 1.0);
+        vWorldPosition = worldPosition.xyz;
+        gl_Position = projectionMatrix * viewMatrix * worldPosition;
+      }
+    `,
+    fragmentShader: `
+      uniform vec3 topColor;
+      uniform vec3 bottomColor;
+      uniform float offset;
+      uniform float exponent;
+      varying vec3 vWorldPosition;
+      void main() {
+        float h = normalize(vWorldPosition + vec3(0.0, offset, 0.0)).y;
+        float t = pow(max(h, 0.0), exponent);
+        gl_FragColor = vec4(mix(bottomColor, topColor, t), 1.0);
+      }
+    `,
+    side: THREE.BackSide,
+    depthWrite: false,
+  });
+  const sky = new THREE.Mesh(skyGeo, skyMat);
+  sky.name = "sky-dome";
+  scene.add(sky);
+}
+
+addSky();
+
+const CHARACTER_PATH = "/models/bots/";
+const TARGET_CHARACTER_HEIGHT = 1.8;
+const characterCache = new Map();
+const BUILDING_PATH = "/models/buildings/Models/";
+const buildingModelCache = new Map();
+let buildingBundlePromise = null;
+
+function loadBuildingBundle() {
+  if (!buildingBundlePromise) {
+    const loader = new GLTFLoader();
+    loader.setPath(BUILDING_PATH);
+    buildingBundlePromise = new Promise((resolve, reject) => {
+      loader.load(
+        "Buildings.glb",
+        (gltf) => {
+          const model = gltf.scene || (gltf.scenes && gltf.scenes[0]);
+          if (!model) {
+            reject(new Error("Buildings.glb missing scene"));
+            return;
+          }
+          model.traverse((child) => {
+            if (child.isMesh) {
+              child.castShadow = true;
+              child.receiveShadow = true;
+              child.userData = child.userData || {};
+              child.userData.sharedModel = true;
+            }
+          });
+          resolve(model);
+        },
+        undefined,
+        (err) => {
+          console.error("Failed to load building bundle GLB", err);
+          buildingBundlePromise = null;
+          reject(err);
+        }
+      );
+    });
+  }
+  return buildingBundlePromise;
+}
+
+function loadCharacterTemplate(index) {
+  if (!characterCache.has(index)) {
+    const promise = new Promise((resolve, reject) => {
+      const mtlLoader = new MTLLoader();
+      mtlLoader.setPath(CHARACTER_PATH);
+      mtlLoader.load(
+        `Zed_${index}.mtl`,
+        (materials) => {
+          materials.preload();
+
+          const objLoader = new OBJLoader();
+          objLoader.setMaterials(materials);
+          objLoader.setPath(CHARACTER_PATH);
+          objLoader.load(
+            `Zed_${index}.obj`,
+            (model) => {
+              model.traverse((child) => {
+                if (child.isMesh) {
+                  child.castShadow = true;
+                  child.receiveShadow = true;
+                }
+              });
+
+              const box = new THREE.Box3().setFromObject(model);
+              const height = box.max.y - box.min.y;
+              let scale = 1;
+              if (Number.isFinite(height) && height > 0) {
+                scale = Math.min(1, TARGET_CHARACTER_HEIGHT / height);
+              }
+              model.scale.setScalar(scale);
+              if (Number.isFinite(box.min.y)) {
+                model.position.y -= box.min.y * scale;
+              }
+
+              resolve(model);
+            },
+            undefined,
+            (err) => {
+              console.error("Failed to load character OBJ", err);
+              characterCache.delete(index);
+              reject(err);
+            }
+          );
+        },
+        undefined,
+        (err) => {
+          console.error("Failed to load character MTL", err);
+          characterCache.delete(index);
+          reject(err);
+        }
+      );
+    });
+    characterCache.set(index, promise);
+  }
+  return characterCache.get(index);
+}
+
+function loadCharacter(index, callback) {
+  return loadCharacterTemplate(index).then((model) => {
+    const clone = model.clone(true);
+    clone.traverse((child) => {
+      if (child.isMesh) {
+        child.userData = child.userData || {};
+        child.userData.sharedModel = true;
+      }
+    });
+    if (callback) callback(clone);
+    return clone;
+  });
+}
+
+function pickCharacterIndex(playerId) {
+  const safeId = Math.abs(Number(playerId || 0));
+  return (safeId % 6) + 1;
+}
+
+function loadBuildingModel(name) {
+  if (!buildingModelCache.has(name)) {
+    const promise = (async () => {
+      const bundle = await loadBuildingBundle();
+      const idx = Math.max(0, parseInt(name.split("_")[1], 10) - 1);
+      // Prefer child by name, then by index, then whole bundle as fallback.
+      const candidateByName = bundle.getObjectByName(name);
+      const meshChildren = bundle.children.filter((c) => c.isMesh || c.isGroup || c.isObject3D);
+      const candidateByIndex = meshChildren[idx] || meshChildren[0] || bundle;
+      const template = candidateByName || candidateByIndex || bundle;
+      return template;
+    })().catch((err) => {
+      console.error("Failed to load building", name, err);
+      buildingModelCache.delete(name);
+      throw err;
+    });
+    buildingModelCache.set(name, promise);
+  }
+  return buildingModelCache.get(name);
+}
+
+const weaponModelCache = new Map();
+function loadWeaponModel(name, callback) {
+  if (!weaponModelCache.has(name)) {
+    const promise = new Promise((resolve, reject) => {
+      const mtlLoader = new MTLLoader();
+      mtlLoader.setPath("/models/weapons/");
+      mtlLoader.load(
+        `${name}.mtl`,
+        (materials) => {
+          materials.preload();
+          const objLoader = new OBJLoader();
+          objLoader.setMaterials(materials);
+          objLoader.setPath("/models/weapons/");
+          objLoader.load(
+            `${name}.obj`,
+            (model) => {
+              model.traverse((child) => {
+                if (child.isMesh) {
+                  child.castShadow = true;
+                  child.receiveShadow = true;
+                  child.userData = child.userData || {};
+                  child.userData.sharedModel = true;
+                }
+              });
+              resolve(model);
+              if (callback) callback(model);
+            },
+            undefined,
+            (err) => {
+              console.error("Failed to load weapon OBJ", err);
+              weaponModelCache.delete(name);
+              reject(err);
+            }
+          );
+        },
+        undefined,
+        (err) => {
+          console.error("Failed to load weapon MTL", err);
+          weaponModelCache.delete(name);
+          reject(err);
+        }
+      );
+    });
+    weaponModelCache.set(name, promise);
+  }
+  return weaponModelCache.get(name);
+}
 
 function makeNoiseTexture(colorA, colorB) {
   const size = 128;
@@ -163,15 +416,53 @@ function makeGroundMaterial(a, b) {
 }
 
 const groundMat = makeGroundMaterial([26, 44, 32], [34, 60, 40]);
-const groundSize = 280;
-const ground = new THREE.Mesh(new THREE.PlaneGeometry(groundSize, groundSize), groundMat);
+const ground = new THREE.Mesh(new THREE.PlaneGeometry(GROUND_SIZE, GROUND_SIZE), groundMat);
 ground.rotation.x = -Math.PI / 2;
 ground.receiveShadow = true;
 scene.add(ground);
 let pathMesh = null;
 
 let colliders = [];
-let mapObjects = [];
+let currentMapId = null;
+let currentMapMeshes = [];
+let latestPlayers = [];
+const cityBuildingLayout = [
+  // North belt
+  { model: "Building_1", x: -52, z: -62, rot: 4, scale: 1.05 },
+  { model: "Building_2", x: -27, z: -62, rot: -6, scale: 1.0 },
+  { model: "Building_3", x: -2, z: -62, rot: 12, scale: 1.02 },
+  { model: "Building_4", x: 23, z: -62, rot: -8, scale: 1.05 },
+  { model: "Building_5", x: 48, z: -62, rot: 16, scale: 1.08 },
+  // Mid-north row
+  { model: "Building_6", x: -52, z: -34, rot: 86, scale: 1.0 },
+  { model: "Building_7", x: -27, z: -34, rot: -94, scale: 1.0 },
+  { model: "Building_8", x: -2, z: -34, rot: 92, scale: 0.98 },
+  { model: "Building_9", x: 23, z: -34, rot: -92, scale: 1.0 },
+  { model: "Building_10", x: 48, z: -34, rot: 88, scale: 1.02 },
+  // Central tight grid (streets ~8-10u wide pre-scale)
+  { model: "Building_3", x: -52, z: -6, rot: 10, scale: 0.98 },
+  { model: "Building_2", x: -27, z: -6, rot: 184, scale: 1.0 },
+  { model: "Building_1", x: -2, z: -6, rot: -4, scale: 1.0 },
+  { model: "Building_4", x: 23, z: -6, rot: 180, scale: 1.0 },
+  { model: "Building_5", x: 48, z: -6, rot: -6, scale: 1.0 },
+  { model: "Building_6", x: -52, z: 20, rot: 6, scale: 0.98 },
+  { model: "Building_7", x: -27, z: 20, rot: -12, scale: 1.0 },
+  { model: "Building_8", x: -2, z: 20, rot: 170, scale: 1.0 },
+  { model: "Building_9", x: 23, z: 20, rot: -188, scale: 1.0 },
+  { model: "Building_10", x: 48, z: 20, rot: 182, scale: 1.02 },
+  // Mid-south row
+  { model: "Building_1", x: -52, z: 46, rot: 8, scale: 1.05 },
+  { model: "Building_2", x: -27, z: 46, rot: -6, scale: 1.0 },
+  { model: "Building_3", x: -2, z: 46, rot: 16, scale: 1.02 },
+  { model: "Building_4", x: 23, z: 46, rot: -10, scale: 1.05 },
+  { model: "Building_5", x: 48, z: 46, rot: 14, scale: 1.08 },
+  // South belt
+  { model: "Building_6", x: -52, z: 72, rot: 184, scale: 1.05 },
+  { model: "Building_7", x: -27, z: 72, rot: 176, scale: 1.02 },
+  { model: "Building_8", x: -2, z: 72, rot: -186, scale: 1.02 },
+  { model: "Building_9", x: 23, z: 72, rot: 178, scale: 1.05 },
+  { model: "Building_10", x: 48, z: 72, rot: -182, scale: 1.08 },
+];
 const mapDefinitions = {
   dust: {
     name: "Dust Valley",
@@ -256,10 +547,16 @@ const mapDefinitions = {
       { x: 0, z: 24, w: 12, h: 2, rot: 0 },
     ],
   },
+  city: {
+    name: "City Block",
+    ambient: 0xd6e3f2,
+    ground: { a: [72, 76, 84], b: [80, 86, 96] },
+    cityBuildings: cityBuildingLayout,
+  },
 };
 
 function registerObject(obj) {
-  mapObjects.push(obj);
+  currentMapMeshes.push(obj);
   return obj;
 }
 
@@ -384,28 +681,99 @@ function addRamp(x, z, w, h, rot) {
 }
 
 function clearMap() {
-  mapObjects.forEach((obj) => {
+  currentMapMeshes.forEach((obj) => {
     scene.remove(obj);
+    disposeObject(obj);
   });
-  mapObjects.length = 0;
+  currentMapMeshes.length = 0;
   colliders = [];
-  if (pathMesh) {
-    scene.remove(pathMesh);
-    pathMesh = null;
-  }
+  pathMesh = null;
+}
+
+function buildCityMap(sceneRef, def, mapId) {
+  const placements = def.cityBuildings || [];
+  if (!placements.length) return;
+  const expectedMap = mapId;
+  const tasks = placements.map(async (entry) => {
+    try {
+      const base = await loadBuildingModel(entry.model);
+      if (currentMapId !== expectedMap) return null;
+      const clone = base.clone(true);
+      clone.traverse((child) => {
+        if (child.isMesh) {
+          child.castShadow = true;
+          child.receiveShadow = true;
+          child.userData = child.userData || {};
+          child.userData.sharedModel = true;
+        }
+      });
+      const scale = entry.scale ?? 1;
+      clone.scale.setScalar(scale);
+      clone.position.set(entry.x * MAP_SCALE, entry.y ?? 0, entry.z * MAP_SCALE);
+      clone.rotation.y = THREE.MathUtils.degToRad(entry.rot || 0);
+      clone.updateMatrixWorld(true);
+      let box = new THREE.Box3().setFromObject(clone);
+      if (Number.isFinite(box.min.y) && Math.abs(box.min.y) > 0.001) {
+        clone.position.y -= box.min.y;
+        clone.updateMatrixWorld(true);
+        box = new THREE.Box3().setFromObject(clone);
+      }
+      sceneRef.add(clone);
+      registerObject(clone);
+      addColliderFromMesh(clone, entry.padding ?? 0.8);
+      return {
+        x: (box.max.x + box.min.x) / 2,
+        z: (box.max.z + box.min.z) / 2,
+        w: box.max.x - box.min.x,
+        d: box.max.z - box.min.z,
+      };
+    } catch (err) {
+      console.error("Failed to load building", entry.model, err);
+      return null;
+    }
+  });
+
+  Promise.all(tasks).then((bounds) => {
+    if (currentMapId !== expectedMap) return;
+    const valid = bounds.filter(Boolean);
+    if (valid.length) {
+      currentMapDef.buildings = valid;
+      drawMinimap();
+    }
+  });
 }
 
 function loadMap(key) {
-  const def = mapDefinitions[key] || mapDefinitions.city;
-  currentMapDef = def;
+  const def = mapDefinitions[key] || mapDefinitions.dust;
+  const mapChanged = currentMapId && currentMapId !== key;
+  currentMapId = mapDefinitions[key] ? key : "dust";
+  if (mapChanged) {
+    clearRemotePlayers();
+    playersSnapshot.clear();
+    latestPlayers = [];
+    updateScoreboard();
+  }
   clearMap();
+  const scaleH = (h) => h * (1 + (MAP_SCALE - 1) * 0.35);
+  const isCity = Array.isArray(def.cityBuildings) && def.cityBuildings.length > 0;
+  const scaledBuildings = isCity
+    ? []
+    : (def.buildings || []).map((b) => ({
+        ...b,
+        x: b.x * MAP_SCALE,
+        z: b.z * MAP_SCALE,
+        w: b.w * MAP_SCALE,
+        d: b.d * MAP_SCALE,
+        h: scaleH(b.h),
+      }));
+  currentMapDef = { ...def, buildings: scaledBuildings };
   ground.material = makeGroundMaterial(def.ground.a, def.ground.b);
   ground.material.needsUpdate = true;
   if (def.ambient) {
     ambient.color = new THREE.Color(def.ambient);
   }
 
-  if (def.path) {
+  if (!isCity && def.path) {
     const mat = new THREE.MeshStandardMaterial({
       color: def.path.color,
       roughness: 0.9,
@@ -413,21 +781,31 @@ function loadMap(key) {
       opacity: 0.7,
       transparent: true,
     });
-    pathMesh = new THREE.Mesh(new THREE.PlaneGeometry(def.path.w, def.path.d), mat);
+    pathMesh = new THREE.Mesh(new THREE.PlaneGeometry(def.path.w * MAP_SCALE, def.path.d * MAP_SCALE), mat);
     pathMesh.rotation.x = -Math.PI / 2;
     pathMesh.position.set(0, 0.02, 0);
     scene.add(pathMesh);
     registerObject(pathMesh);
   }
 
-  def.buildings?.forEach((b) => addBuilding(b.x, b.z, b.w, b.d, b.h, b.color));
-  def.trees?.forEach(([x, z]) => addTree(x, z, 0.9 + Math.random() * 0.5));
-  def.crates?.forEach((c) => addCrate(c.x, c.z, c.size, c.color));
-  def.pillars?.forEach((p) => addPillar(p.x, p.z, p.h, p.color));
-  def.platforms?.forEach((p) => addPlatform(p.x, p.z, p.w, p.d, p.h));
-  def.ramps?.forEach((r) => addRamp(r.x, r.z, r.w, r.h, r.rot));
-  def.cacti?.forEach((c) => addCactus(c.x, c.z));
-  def.rocks?.forEach((r) => addRock(r.x, r.z));
+  if (isCity) {
+    currentMapDef.buildings = [];
+    buildCityMap(scene, def, currentMapId);
+  } else {
+    scaledBuildings?.forEach((b) => addBuilding(b.x, b.z, b.w, b.d, b.h, b.color));
+    def.trees?.forEach(([x, z]) => addTree(x * MAP_SCALE, z * MAP_SCALE, (0.9 + Math.random() * 0.5) * (1 + (MAP_SCALE - 1) * 0.2)));
+    def.crates?.forEach((c) => addCrate(c.x * MAP_SCALE, c.z * MAP_SCALE, c.size * MAP_SCALE * 0.9, c.color));
+    def.pillars?.forEach((p) => addPillar(p.x * MAP_SCALE, p.z * MAP_SCALE, scaleH(p.h), p.color));
+    def.platforms?.forEach((p) => addPlatform(p.x * MAP_SCALE, p.z * MAP_SCALE, p.w * MAP_SCALE, p.d * MAP_SCALE, scaleH(p.h)));
+    def.ramps?.forEach((r) => addRamp(r.x * MAP_SCALE, r.z * MAP_SCALE, r.w * MAP_SCALE, scaleH(r.h), r.rot));
+    def.cacti?.forEach((c) => addCactus(c.x * MAP_SCALE, c.z * MAP_SCALE, 3 * (1 + (MAP_SCALE - 1) * 0.25)));
+    def.rocks?.forEach((r) => addRock(r.x * MAP_SCALE, r.z * MAP_SCALE));
+  }
+  const mapIndicator = document.getElementById("map-indicator");
+  if (mapIndicator) {
+    mapIndicator.textContent = `Map: ${def.name || currentMapId}`;
+  }
+  drawMinimap();
 }
 
 loadMap(selectedMap);
@@ -468,7 +846,8 @@ const player = {
   position: new THREE.Vector3(0, 1.6, 6),
   velocity: new THREE.Vector3(),
   onGround: false,
-  loadout: { primary: "ak", secondary: "glock", melee: "knife" },
+  loadout: { primary: "AssaultRifle_1", secondary: "Pistol_1", melee: "knife" },
+  weapon: "AssaultRifle_1",
   weapons: {},
   currentSlot: "primary",
   ammo: {
@@ -479,11 +858,12 @@ const player = {
     reloadTime: 1.5,
     damage: 15,
     fireDelay: 180,
-    sound: "ar",
+    sound: "assault",
+    reloadSound: "assaultReload",
+    range: 120,
   },
 };
 
-const WORLD_HALF_SIZE = 140;
 const PLAYER_HEIGHT = 1.6;
 const PLAYER_RADIUS = 0.65;
 const GRAVITY = 26;
@@ -515,11 +895,17 @@ let myNickname = "";
 let lastShotAt = 0;
 
 const remotePlayers = new Map(); // id -> { mesh, tag, hp }
+function clearRemotePlayers() {
+  for (const entry of remotePlayers.values()) {
+    scene.remove(entry.mesh);
+    disposeObject(entry.mesh);
+  }
+  remotePlayers.clear();
+}
 const clock = new THREE.Clock();
 const playersSnapshot = new Map();
 const killfeedItems = [];
 let bobTime = 0;
-let latestPlayers = [];
 let profileId = null;
 const profileTotals = { kills: 0, deaths: 0 };
 let fireTimer = null;
@@ -659,33 +1045,65 @@ function updateAmmoUI() {
   }
 }
 
+function resetAmmoForLoadout(playSound = false) {
+  const loadout = player.loadout || { primary: selectedPrimary, secondary: selectedSecondary, melee: "knife" };
+  const targetSlot = player.currentSlot || "primary";
+  player.weapons = player.weapons || {};
+  ["primary", "secondary", "melee"].forEach((slot) => {
+    const key = loadout[slot];
+    const def = weaponDefs[key];
+    if (!def) return;
+    player.weapons[key] = {
+      mag: def.magazineSize || def.mag || 1,
+      reserve: def.reserve === Infinity ? Infinity : def.reserve ?? 0,
+    };
+  });
+  equipWeapon(targetSlot);
+  player.ammo.reloading = false;
+  if (playSound && player.ammo.weaponKey !== "knife") {
+    const reloadKey = player.ammo.reloadSound || `${player.ammo.sound}Reload`;
+    const rel = sounds[reloadKey] || sounds.reload || sounds.empty;
+    if (rel) {
+      rel.currentTime = 0;
+      rel.play().catch(() => {});
+    }
+  }
+  updateAmmoUI();
+}
+
 function equipWeapon(slotName) {
   const loadout = player.loadout || { primary: selectedPrimary, secondary: selectedSecondary, melee: "knife" };
   const weaponKey = loadout[slotName];
   const def = weaponDefs[weaponKey];
   if (!def) return;
   player.currentSlot = slotName;
+  player.weapon = weaponKey;
   const state = player.weapons[weaponKey] || {
-    mag: def.mag === Infinity ? 1 : def.mag,
-    reserve: def.reserve === Infinity ? 0 : def.reserve,
+    mag: def.magazineSize || def.mag || 1,
+    reserve: def.reserve === Infinity ? Infinity : def.reserve ?? 0,
   };
   player.weapons[weaponKey] = state;
   player.ammo = {
     ...state,
-    magSize: def.mag === Infinity ? 1 : def.mag,
+    magSize: def.magazineSize || def.mag || 1,
     reloading: false,
-    reloadTime: def.reload,
+    reloadTime: def.reloadTime ?? def.reload ?? 0,
     damage: def.damage,
     fireDelay: def.fireDelay,
-    sound: def.sound,
-    reloadSound: def.reloadSound,
+    fireRate: def.fireRate,
+    range: def.range ?? 120,
+    bulletSpeed: def.bulletSpeed ?? 220,
+    sound: def.sound || def.soundFire,
+    reloadSound: def.reloadSound || def.soundReload,
     recoil: def.recoil || 0,
     auto: !!def.auto,
     reserve: def.reserve === Infinity ? Infinity : state.reserve,
+    scoped: !!def.scoped,
     weaponKey,
   };
   updateAmmoUI();
   updateViewmodel(weaponKey);
+  applyScope(scoped);
 }
 
 function switchWeapon(slot) {
@@ -738,38 +1156,118 @@ function makeNameTag(text) {
   return sprite;
 }
 
-function createRemotePlayer(nickname, isBot) {
+function disposeObject(object) {
+  if (!object) return;
+  const disposeTex = (tex) => {
+    if (tex && typeof tex.dispose === "function") {
+      tex.dispose();
+    }
+  };
+  object.traverse((child) => {
+    if (child.isMesh) {
+      if (child.userData?.sharedModel) return;
+      if (child.geometry?.dispose) child.geometry.dispose();
+      const mats = Array.isArray(child.material) ? child.material : [child.material];
+      mats.forEach((mat) => {
+        if (!mat) return;
+        disposeTex(mat.map);
+        disposeTex(mat.lightMap);
+        disposeTex(mat.aoMap);
+        disposeTex(mat.emissiveMap);
+        disposeTex(mat.bumpMap);
+        disposeTex(mat.normalMap);
+        disposeTex(mat.displacementMap);
+        disposeTex(mat.roughnessMap);
+        disposeTex(mat.metalnessMap);
+        disposeTex(mat.alphaMap);
+        disposeTex(mat.envMap);
+        if (mat.dispose) mat.dispose();
+      });
+    } else if (child.material?.dispose) {
+      child.material.dispose();
+    }
+  });
+}
+
+function applyWorldWeaponTransform(mesh, weaponKey) {
+  const t = weaponWorldOffsets[weaponKey] || weaponWorldOffsets.default;
+  const deg = THREE.MathUtils.degToRad;
+  mesh.position.set(t.pos.x, t.pos.y, t.pos.z);
+  mesh.rotation.set(deg(t.rot.x), deg(t.rot.y), deg(t.rot.z));
+  mesh.scale.setScalar(t.scale || 1);
+}
+
+async function setRemoteWeapon(entry, weaponKey) {
+  if (entry.weaponKey === weaponKey) return;
+  if (entry.weaponMesh) {
+    entry.mesh.remove(entry.weaponMesh);
+    disposeObject(entry.weaponMesh);
+    entry.weaponMesh = null;
+  }
+  entry.weaponKey = weaponKey;
+  const def = weaponDefs[weaponKey];
+  if (!def || !def.model) return;
+  try {
+    const base = await loadWeaponModel(def.model);
+    if (entry.weaponKey !== weaponKey) return;
+    const clone = base.clone(true);
+    clone.position.set(0, 0, 0);
+    clone.rotation.set(0, 0, 0);
+    clone.scale.set(1, 1, 1);
+    applyWorldWeaponTransform(clone, weaponKey);
+    entry.mesh.add(clone);
+    entry.weaponMesh = clone;
+  } catch (err) {
+    console.error("Failed to attach remote weapon", err);
+  }
+}
+
+function createRemotePlayer(nickname, isBot, playerId) {
   const color = isBot ? 0xc8d14c : 0xd44a4a;
-  const bodyGeo = new THREE.CapsuleGeometry(0.35, 0.8, 6, 12);
-  const body = new THREE.Mesh(
-    bodyGeo,
-    new THREE.MeshStandardMaterial({ color, roughness: 0.45, metalness: 0.12 })
-  );
-  body.castShadow = true;
-  body.receiveShadow = true;
-  body.position.y = 0.8;
-
-  const head = new THREE.Mesh(
-    new THREE.SphereGeometry(0.28, 16, 16),
-    new THREE.MeshStandardMaterial({ color: 0xffddc4, roughness: 0.6 })
-  );
-  head.position.y = 1.5;
-  head.castShadow = true;
-
-  const armGeo = new THREE.BoxGeometry(0.12, 0.4, 0.12);
-  const armL = new THREE.Mesh(armGeo, new THREE.MeshStandardMaterial({ color: 0x888888, roughness: 0.5 }));
-  const armR = new THREE.Mesh(armGeo, new THREE.MeshStandardMaterial({ color: 0x888888, roughness: 0.5 }));
-  armL.position.set(-0.35, 1.0, 0);
-  armR.position.set(0.35, 1.0, 0);
-
   const tag = makeNameTag(nickname);
-  tag.position.set(0, 2, 0);
+  tag.position.set(0, 2.2, 0);
   tag.userData = { label: nickname };
 
   const group = new THREE.Group();
-  group.add(body, head, armL, armR, tag);
+  const placeholder = new THREE.Mesh(
+    new THREE.CapsuleGeometry(0.35, 0.8, 6, 12),
+    new THREE.MeshStandardMaterial({ color, roughness: 0.45, metalness: 0.12 })
+  );
+  placeholder.castShadow = true;
+  placeholder.receiveShadow = true;
+  placeholder.position.y = 0.9;
+  group.add(placeholder, tag);
   scene.add(group);
-  return { mesh: group, tag, targetPos: new THREE.Vector3(), rotTarget: 0, body, head, baseColor: color };
+
+  const entry = {
+    mesh: group,
+    tag,
+    targetPos: new THREE.Vector3(),
+    rotTarget: 0,
+    placeholder,
+    characterIndex: pickCharacterIndex(playerId),
+    weaponMesh: null,
+    weaponKey: null,
+  };
+
+  loadCharacter(entry.characterIndex)
+    .then((model) => {
+      if (!remotePlayers.has(playerId)) {
+        disposeObject(model);
+        return;
+      }
+      entry.model = model;
+      group.add(model);
+      if (entry.placeholder) {
+        group.remove(entry.placeholder);
+        entry.placeholder.geometry.dispose();
+        entry.placeholder.material.dispose();
+        entry.placeholder = null;
+      }
+    })
+    .catch((err) => console.error("Failed to load character model", err));
+
+  return entry;
 }
 
 function updateRemotePlayers(serverPlayers) {
@@ -783,7 +1281,7 @@ function updateRemotePlayers(serverPlayers) {
 
     let entry = remotePlayers.get(p.id);
     if (!entry) {
-      entry = createRemotePlayer(p.nickname, p.isBot);
+      entry = createRemotePlayer(p.nickname, p.isBot, p.id);
       remotePlayers.set(p.id, entry);
       entry.mesh.position.set(p.x, p.y - PLAYER_HEIGHT, p.z);
     }
@@ -792,9 +1290,13 @@ function updateRemotePlayers(serverPlayers) {
     if (entry.tag.userData?.label !== p.nickname) {
       entry.mesh.remove(entry.tag);
       entry.tag = makeNameTag(p.nickname);
-      entry.tag.position.set(0, 2, 0);
+      entry.tag.position.set(0, 2.2, 0);
       entry.mesh.add(entry.tag);
       entry.tag.userData = { label: p.nickname };
+    }
+
+    if (p.weapon) {
+      setRemoteWeapon(entry, p.weapon);
     }
 
     entry.targetPos.set(p.x, p.y - PLAYER_HEIGHT, p.z);
@@ -804,6 +1306,7 @@ function updateRemotePlayers(serverPlayers) {
   for (const [id, entry] of remotePlayers.entries()) {
     if (!seen.has(id)) {
       scene.remove(entry.mesh);
+      disposeObject(entry.mesh);
       remotePlayers.delete(id);
     }
   }
@@ -853,15 +1356,62 @@ function hitMarker() {
 function highlightTarget(targetId) {
   const entry = remotePlayers.get(targetId);
   if (!entry) return;
-  const bodyMat = entry.body.material;
-  const headMat = entry.head.material;
-  bodyMat.emissive = new THREE.Color(0.6, 0, 0);
-  headMat.emissive = new THREE.Color(0.5, 0, 0);
+  const mats = [];
+  entry.mesh.traverse((child) => {
+    if (child.isMesh) {
+      const list = Array.isArray(child.material) ? child.material : [child.material];
+      list.forEach((mat) => {
+        if (mat && mat.emissive && typeof mat.emissive.set === "function") {
+          mats.push(mat);
+        }
+      });
+    }
+  });
+
+  mats.forEach((mat) => {
+    if (!mat.userData) mat.userData = {};
+    if (!mat.userData.__lanHighlightEmissive) {
+      mat.userData.__lanHighlightEmissive = mat.emissive.clone();
+    }
+    mat.emissive.set(0.6, 0, 0);
+  });
+
   setTimeout(() => {
-    bodyMat.emissive.set(0, 0, 0);
-    headMat.emissive.set(0, 0, 0);
+    mats.forEach((mat) => {
+      if (mat.userData?.__lanHighlightEmissive) {
+        mat.emissive.copy(mat.userData.__lanHighlightEmissive);
+        delete mat.userData.__lanHighlightEmissive;
+      } else {
+        mat.emissive.set(0, 0, 0);
+      }
+    });
   }, 220);
   hitMarker();
+}
+
+function renderIncomingShot(msg) {
+  if (!msg?.origin || !msg?.dir) return;
+  const origin = new THREE.Vector3(msg.origin.x, msg.origin.y, msg.origin.z);
+  const dir = new THREE.Vector3(msg.dir.x, msg.dir.y, msg.dir.z).normalize();
+  const color = msg.isBot ? 0xffa04d : 0x7cc3ff;
+  spawnTracer(origin, dir, color, 140, 12);
+  const flash = new THREE.PointLight(color, 2, 10);
+  flash.position.copy(origin);
+  scene.add(flash);
+  setTimeout(() => scene.remove(flash), 140);
+
+  const shooter = remotePlayers.get(msg.shooterId);
+  if (shooter?.body?.material) {
+    shooter.body.material.emissive = new THREE.Color(0.35, 0.18, 0);
+    setTimeout(() => (shooter.body.material.emissive = new THREE.Color(0, 0, 0)), 160);
+  }
+
+  const listenerPos = controls.getObject().position;
+  if (listenerPos.distanceTo(origin) < 38) {
+    const snd = sounds.shot;
+    snd.currentTime = 0;
+    snd.play().catch(() => {});
+  }
 }
 
 let scoreboardVisible = false;
@@ -1012,79 +1562,123 @@ function updateMovement(delta) {
 }
 
 const muzzleLight = new THREE.PointLight(0xffddaa, 2.2, 12);
-muzzleLight.position.set(0.25, -0.1, -0.6);
 muzzleLight.visible = false;
-camera.add(muzzleLight);
 
-// Simple viewmodel gun attached to camera.
+// Viewmodel gun attached to camera.
 const weapon = new THREE.Group();
-weapon.position.set(0.35, -0.35, -0.6);
-weapon.rotation.set(-0.05, 0.2, 0);
-const gunBody = new THREE.Mesh(
-  new THREE.BoxGeometry(0.35, 0.22, 0.9),
-  new THREE.MeshStandardMaterial({ color: 0x2b2f3a, metalness: 0.3, roughness: 0.5, emissive: 0x0c0f14 })
-);
-const gunBarrel = new THREE.Mesh(
-  new THREE.CylinderGeometry(0.05, 0.05, 0.6, 12),
-  new THREE.MeshStandardMaterial({ color: 0x3e4a60, metalness: 0.6, roughness: 0.4 })
-);
-gunBarrel.rotation.z = Math.PI / 2;
-gunBarrel.position.set(0.18, 0, -0.45);
-const grip = new THREE.Mesh(
-  new THREE.BoxGeometry(0.12, 0.25, 0.2),
-  new THREE.MeshStandardMaterial({ color: 0x1b1f28, roughness: 0.5 })
-);
-grip.position.set(-0.05, -0.15, 0.05);
-weapon.add(gunBody, gunBarrel, grip);
+weapon.position.set(0, 0, 0);
+weapon.rotation.set(0, 0, 0);
+let currentWeaponMesh = null;
+let currentWeaponKeyForView = null;
 
 const muzzleFlash = new THREE.Mesh(
   new THREE.SphereGeometry(0.1, 8, 8),
   new THREE.MeshBasicMaterial({ color: 0xffe9b0, transparent: true, opacity: 0 })
 );
-muzzleFlash.position.set(0.35, -0.2, -1.0);
 weapon.add(muzzleFlash);
+weapon.add(muzzleLight);
 camera.add(weapon);
 
-function updateViewmodel(weaponKey) {
-  const colors = {
-    ak: 0x2b2f3a,
-    m4: 0x2d3848,
-    awp: 0x1f3a4b,
-    mp9: 0x2e3b46,
-    nova: 0x3a1f1f,
-    glock: 0x4b3a2b,
-    usp: 0x3c3a3a,
-    deagle: 0x3d3127,
-    knife: 0x2a2a2a,
-  };
-  const barrelLen =
-    weaponKey === "awp"
-      ? 1.2
-      : weaponKey === "nova"
-      ? 0.8
-      : weaponKey === "mp9" || weaponKey === "glock" || weaponKey === "usp" || weaponKey === "deagle"
-      ? 0.5
-      : 0.7;
-  const isPistol = weaponKey === "glock" || weaponKey === "usp" || weaponKey === "deagle";
-  gunBody.material.color = new THREE.Color(colors[weaponKey] || 0x2b2f3a);
-  gunBarrel.scale.z = barrelLen / 0.6;
-  gunBarrel.position.z = -0.2 - barrelLen * 0.6;
-  muzzleFlash.position.z = -0.2 - barrelLen * 0.65;
-  gunBody.scale.set(isPistol ? 0.7 : weaponKey === "knife" ? 0.4 : 1, 1, isPistol ? 0.6 : weaponKey === "knife" ? 0.5 : 1);
+const weaponViewOffsets = {
+  default: { pos: { x: 0.42, y: -0.36, z: -0.56 }, rot: { x: -6, y: 460, z: 0 }, scale: 0.36, muzzle: { x: 0.04, y: -0.08, z: -0.679 } },
+  AssaultRifle_1: { pos: { x: 0.44, y: -0.38, z: -0.616 }, rot: { x: -6, y: 460, z: 0 }, scale: 0.34, muzzle: { x: 0.02, y: -0.08, z: -0.749 } },
+  AssaultRifle_2: { pos: { x: 0.44, y: -0.4, z: -0.63 }, rot: { x: -6, y: 460, z: 0 }, scale: 0.34, muzzle: { x: 0.02, y: -0.08, z: -0.749 } },
+  AssaultRifle_3: { pos: { x: 0.43, y: -0.42, z: -0.658 }, rot: { x: -7, y: 460, z: 0 }, scale: 0.35, muzzle: { x: 0.02, y: -0.08, z: -0.784 } },
+  Bullpup_1: { pos: { x: 0.4, y: -0.36, z: -0.574 }, rot: { x: -5, y: 460, z: 0 }, scale: 0.35, muzzle: { x: 0.0, y: -0.06, z: -0.679 } },
+  Bullpup_2: { pos: { x: 0.4, y: -0.36, z: -0.588 }, rot: { x: -5, y: 460, z: 0 }, scale: 0.35, muzzle: { x: 0.0, y: -0.06, z: -0.679 } },
+  Pistol_1: { pos: { x: 0.38, y: -0.32, z: -0.42 }, rot: { x: -4, y: 460, z: 0 }, scale: 0.42, muzzle: { x: 0.04, y: -0.03, z: -0.518 } },
+  Pistol_2: { pos: { x: 0.38, y: -0.32, z: -0.42 }, rot: { x: -4, y: 460, z: 0 }, scale: 0.42, muzzle: { x: 0.04, y: -0.03, z: -0.518 } },
+  Pistol_3: { pos: { x: 0.38, y: -0.32, z: -0.42 }, rot: { x: -4, y: 460, z: 0 }, scale: 0.42, muzzle: { x: 0.04, y: -0.03, z: -0.518 } },
+  Pistol_4: { pos: { x: 0.38, y: -0.32, z: -0.42 }, rot: { x: -4, y: 460, z: 0 }, scale: 0.42, muzzle: { x: 0.04, y: -0.03, z: -0.518 } },
+  Pistol_5: { pos: { x: 0.38, y: -0.32, z: -0.42 }, rot: { x: -4, y: 460, z: 0 }, scale: 0.42, muzzle: { x: 0.04, y: -0.03, z: -0.518 } },
+  Pistol_6: { pos: { x: 0.38, y: -0.32, z: -0.42 }, rot: { x: -4, y: 460, z: 0 }, scale: 0.42, muzzle: { x: 0.04, y: -0.03, z: -0.518 } },
+  Revolver_1: { pos: { x: 0.4, y: -0.33, z: -0.462 }, rot: { x: -6, y: 460, z: 0 }, scale: 0.44, muzzle: { x: 0.05, y: -0.04, z: -0.574 } },
+  Revolver_2: { pos: { x: 0.4, y: -0.33, z: -0.462 }, rot: { x: -6, y: 460, z: 0 }, scale: 0.44, muzzle: { x: 0.05, y: -0.04, z: -0.574 } },
+  Revolver_3: { pos: { x: 0.4, y: -0.33, z: -0.462 }, rot: { x: -6, y: 460, z: 0 }, scale: 0.44, muzzle: { x: 0.05, y: -0.04, z: -0.574 } },
+};
+
+const weaponWorldOffsets = {
+  default: { pos: { x: 0.32, y: 0.95, z: 0.18 }, rot: { x: 0, y: 460, z: 0 }, scale: 0.3 },
+  AssaultRifle_1: { pos: { x: 0.34, y: 0.98, z: 0.2 }, rot: { x: 0, y: 460, z: 0 }, scale: 0.32 },
+  AssaultRifle_2: { pos: { x: 0.34, y: 0.98, z: 0.2 }, rot: { x: 0, y: 460, z: 0 }, scale: 0.32 },
+  AssaultRifle_3: { pos: { x: 0.34, y: 0.98, z: 0.2 }, rot: { x: 0, y: 460, z: 0 }, scale: 0.34 },
+  Bullpup_1: { pos: { x: 0.32, y: 0.96, z: 0.18 }, rot: { x: 0, y: 460, z: 0 }, scale: 0.32 },
+  Bullpup_2: { pos: { x: 0.32, y: 0.96, z: 0.18 }, rot: { x: 0, y: 460, z: 0 }, scale: 0.32 },
+  Pistol_1: { pos: { x: 0.26, y: 0.9, z: 0.12 }, rot: { x: 0, y: 460, z: 0 }, scale: 0.38 },
+  Pistol_2: { pos: { x: 0.26, y: 0.9, z: 0.12 }, rot: { x: 0, y: 460, z: 0 }, scale: 0.38 },
+  Pistol_3: { pos: { x: 0.26, y: 0.9, z: 0.12 }, rot: { x: 0, y: 460, z: 0 }, scale: 0.38 },
+  Pistol_4: { pos: { x: 0.26, y: 0.9, z: 0.12 }, rot: { x: 0, y: 460, z: 0 }, scale: 0.38 },
+  Pistol_5: { pos: { x: 0.26, y: 0.9, z: 0.12 }, rot: { x: 0, y: 460, z: 0 }, scale: 0.38 },
+  Pistol_6: { pos: { x: 0.26, y: 0.9, z: 0.12 }, rot: { x: 0, y: 460, z: 0 }, scale: 0.38 },
+  Revolver_1: { pos: { x: 0.28, y: 0.92, z: 0.14 }, rot: { x: 0, y: 460, z: 0 }, scale: 0.42 },
+  Revolver_2: { pos: { x: 0.28, y: 0.92, z: 0.14 }, rot: { x: 0, y: 460, z: 0 }, scale: 0.42 },
+  Revolver_3: { pos: { x: 0.28, y: 0.92, z: 0.14 }, rot: { x: 0, y: 460, z: 0 }, scale: 0.42 },
+};
+
+function applyViewWeaponTransform(mesh, weaponKey) {
+  const t = weaponViewOffsets[weaponKey] || weaponViewOffsets.default;
+  const deg = THREE.MathUtils.degToRad;
+  mesh.position.set(t.pos.x, t.pos.y, t.pos.z);
+  mesh.rotation.set(deg(t.rot.x), deg(t.rot.y), deg(t.rot.z));
+  mesh.scale.setScalar(t.scale || 1);
+  if (t.muzzle) {
+    muzzleFlash.position.set(t.muzzle.x, t.muzzle.y, t.muzzle.z);
+    muzzleLight.position.set(t.muzzle.x, t.muzzle.y, (t.muzzle.z || 0) + 0.08);
+  }
 }
 
-function spawnTracer(origin, dir) {
-  const length = 6;
+async function updateViewmodel(weaponKey) {
+  if (currentWeaponKeyForView === weaponKey) return;
+  const def = weaponDefs[weaponKey];
+  if (!def || def.slot === "melee" || !def.model) {
+    const t = weaponViewOffsets.default;
+    if (t?.muzzle) {
+      muzzleFlash.position.set(t.muzzle.x, t.muzzle.y, t.muzzle.z);
+      muzzleLight.position.set(t.muzzle.x, t.muzzle.y, (t.muzzle.z || 0) + 0.08);
+    }
+    if (currentWeaponMesh) {
+      weapon.remove(currentWeaponMesh);
+      currentWeaponMesh = null;
+      currentWeaponKeyForView = null;
+    }
+    return;
+  }
+  try {
+    const base = await loadWeaponModel(def.model);
+    if (player.ammo.weaponKey !== weaponKey) return;
+    const clone = base.clone(true);
+    clone.traverse((child) => {
+      if (child.isMesh) {
+        child.castShadow = false;
+        child.receiveShadow = false;
+      }
+    });
+    if (currentWeaponMesh) {
+      weapon.remove(currentWeaponMesh);
+    }
+    clone.position.set(0, 0, 0);
+    clone.rotation.set(0, 0, 0);
+    clone.scale.set(1, 1, 1);
+    applyViewWeaponTransform(clone, weaponKey);
+    weapon.add(clone);
+    currentWeaponMesh = clone;
+    currentWeaponKeyForView = weaponKey;
+  } catch (err) {
+    console.error("Failed to apply viewmodel", err);
+  }
+}
+
+function spawnTracer(origin, dir, color = 0xffdd88, duration = 80, length = 6) {
   const end = origin.clone().addScaledVector(dir, length);
   const geometry = new THREE.BufferGeometry().setFromPoints([origin, end]);
-  const material = new THREE.LineBasicMaterial({ color: 0xffdd88, transparent: true, opacity: 0.9 });
+  const material = new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.9 });
   const line = new THREE.Line(geometry, material);
   scene.add(line);
   setTimeout(() => {
     scene.remove(line);
     geometry.dispose();
     material.dispose();
-  }, 80);
+  }, duration);
 }
 
 function updateWeapon(delta) {
@@ -1115,6 +1709,9 @@ function shoot() {
   player.ammo.mag = Math.max(0, player.ammo.mag - 1);
   const state = player.weapons[player.ammo.weaponKey];
   if (state) state.mag = player.ammo.mag;
+  if (player.ammo.mag === 0) {
+    setTimeout(() => reload(), 50);
+  }
   updateAmmoUI();
 
   const origin = controls.getObject().position.clone();
@@ -1125,6 +1722,7 @@ function shoot() {
       origin: { x: origin.x, y: origin.y, z: origin.z },
       dir: { x: dir.x, y: dir.y, z: dir.z },
       damage: player.ammo.damage,
+      range: player.ammo.range,
     })
   );
 
@@ -1135,7 +1733,7 @@ function shoot() {
   setTimeout(() => (muzzleLight.visible = false), 40);
   muzzleFlash.material.opacity = 1;
   setTimeout(() => (muzzleFlash.material.opacity = 0), 50);
-  spawnTracer(origin, dir);
+  spawnTracer(origin, dir, 0xffdd88, 100, 10);
   // crosshair bump only (recoil disabled)
   crosshair.style.transform = "translate(-50%, -50%) scale(1.15)";
   setTimeout(() => (crosshair.style.transform = "translate(-50%, -50%) scale(1)"), 100);
@@ -1152,6 +1750,7 @@ function performMelee() {
       origin: { x: origin.x, y: origin.y, z: origin.z },
       dir: { x: dir.x, y: dir.y, z: dir.z },
       damage: weaponDefs.knife.damage,
+      range: player.ammo.range || reach,
     })
   );
   const snd = sounds.damage;
@@ -1198,6 +1797,8 @@ function connect() {
         type: "join",
         nickname: myNickname,
         map: selectedMap,
+        primary: selectedPrimary,
+        secondary: selectedSecondary,
       })
     );
   });
@@ -1210,12 +1811,23 @@ function connect() {
       return;
     }
 
+    if (msg.mapId && msg.mapId !== currentMapId) {
+      selectedMap = msg.mapId;
+      if (mapSelect) mapSelect.value = msg.mapId;
+      loadMap(msg.mapId);
+    }
+
     if (msg.type === "hello") {
       player.id = msg.id;
-      player.position.set(msg.spawn.x, msg.spawn.y, msg.spawn.z);
-      controls.getObject().position.copy(player.position);
-      setHP(msg.hp);
+      if (msg.spawn) {
+        player.position.set(msg.spawn.x, msg.spawn.y, msg.spawn.z);
+        controls.getObject().position.copy(player.position);
+      }
+      if (typeof msg.hp === "number") {
+        setHP(msg.hp);
+      }
     } else if (msg.type === "state") {
+      if (msg.mapId && msg.mapId !== currentMapId) return;
       updatePlayersSnapshot(msg.players);
       updateRemotePlayers(msg.players);
       updateScoreboard();
@@ -1226,6 +1838,8 @@ function connect() {
       sounds.damage.currentTime = 0;
       sounds.damage.play().catch(() => {});
       if (msg.killed && msg.spawn) {
+        resetAmmoForLoadout(true);
+        lastShotAt = 0;
         player.position.set(msg.spawn.x, msg.spawn.y, msg.spawn.z);
         controls.getObject().position.copy(player.position);
         player.velocity.set(0, 0, 0);
@@ -1233,6 +1847,7 @@ function connect() {
         setTimeout(() => showStatus("Respawned", 900), 300);
         log(`Respawned. Killed by ${msg.killer || "someone"}.`);
       } else if (msg.killed) {
+        resetAmmoForLoadout(true);
         showStatus("You died", 1200);
       }
     } else if (msg.type === "killEvent") {
@@ -1240,11 +1855,17 @@ function connect() {
       updateKDUI();
     } else if (msg.type === "hitConfirm") {
       highlightTarget(msg.targetId);
+    } else if (msg.type === "shotEvent") {
+      renderIncomingShot(msg);
     } 
   });
 
   ws.addEventListener("close", () => {
     log("Disconnected from server.");
+    clearRemotePlayers();
+    latestPlayers = [];
+    updateScoreboard();
+    drawMinimap();
   });
 }
 
@@ -1259,6 +1880,7 @@ function sendState() {
       y: pos.y,
       z: pos.z,
       rotY,
+      weapon: player.ammo.weaponKey,
     })
   );
 }
@@ -1271,23 +1893,17 @@ if (startBtn) {
     player.nickname = myNickname;
     player.loadout = { primary: selectedPrimary, secondary: selectedSecondary, melee: "knife" };
     player.map = selectedMap;
-    const loadout = player.loadout;
-    const primaryKey = loadout.primary;
-    const def = weaponDefs[primaryKey];
-    player.ammo.mag = def.mag;
-    player.ammo.magSize = def.mag;
-    player.ammo.reserve = def.reserve;
-    player.ammo.reloadTime = def.reload;
-    player.ammo.damage = def.damage;
-    player.ammo.fireDelay = def.fireDelay;
-    player.ammo.sound = def.sound;
-    player.ammo.reloading = false;
-    equipWeapon("primary");
+    player.currentSlot = "primary";
+    primeAudio();
+    resetAmmoForLoadout(true);
     updateProfileUI();
     killfeedItems.length = 0;
     killfeed.innerHTML = "";
+    clearRemotePlayers();
     playersSnapshot.clear();
     latestPlayers = [];
+    updateScoreboard();
+    drawMinimap();
     loadMap(selectedMap);
     menuMusic.pause();
     if (startScreen) {
@@ -1314,6 +1930,7 @@ document.addEventListener("pointerlockchange", () => {
 });
 
 document.body.addEventListener("click", () => {
+  primeAudio();
   if (!controls.isLocked && startScreen && startScreen.classList.contains("hidden")) {
     controls.lock();
   }
@@ -1470,120 +2087,337 @@ function animate() {
 
 animate();
 const weaponDefs = {
-  ak: {
+  AssaultRifle_1: {
     slot: "primary",
-    name: "AK-47",
-    damage: 34,
-    fireDelay: 120,
-    mag: 30,
-    reserve: Infinity,
-    reload: 2.4,
-    recoil: 0.012,
-    sound: "ak",
-    reloadSound: "akReload",
-    auto: true,
-  },
-  m4: {
-    slot: "primary",
-    name: "M4A1-S",
+    name: "Assault Rifle 1",
+    model: "AssaultRifle_1",
     damage: 28,
     fireDelay: 110,
-    mag: 30,
-    reserve: Infinity,
-    reload: 2.2,
-    recoil: 0.009,
-    sound: "m4",
-    reloadSound: "m4Reload",
-    auto: true,
-  },
-  awp: {
-    slot: "primary",
-    name: "AWP",
-    damage: 95,
-    fireDelay: 1500,
-    mag: 10,
-    reserve: Infinity,
-    reload: 3.5,
-    recoil: 0.02,
-    sound: "awp",
-    reloadSound: "awpReload",
-  },
-  mp9: {
-    slot: "primary",
-    name: "MP9",
-    damage: 16,
-    fireDelay: 85,
-    mag: 30,
-    reserve: Infinity,
-    reload: 2.0,
-    recoil: 0.005,
-    sound: "mp9",
-    reloadSound: "mp9Reload",
-    auto: true,
-  },
-  nova: {
-    slot: "primary",
-    name: "Nova",
-    damage: 80,
-    fireDelay: 850,
-    mag: 8,
-    reserve: Infinity,
-    reload: 3.0,
-    recoil: 0.015,
-    sound: "nova",
-    reloadSound: "novaReload",
-  },
-  glock: {
-    slot: "secondary",
-    name: "Glock-18",
-    damage: 15,
-    fireDelay: 150,
-    mag: 20,
-    reserve: Infinity,
-    reload: 1.8,
-    recoil: 0.004,
-    sound: "glock",
-    reloadSound: "glockReload",
-    auto: true,
-  },
-  usp: {
-    slot: "secondary",
-    name: "USP-S",
-    damage: 20,
-    fireDelay: 170,
-    mag: 12,
-    reserve: Infinity,
-    reload: 2.0,
-    recoil: 0.0055,
-    sound: "usp",
-    reloadSound: "uspReload",
-  },
-  deagle: {
-    slot: "secondary",
-    name: "Desert Eagle",
-    damage: 50,
-    fireDelay: 300,
-    mag: 7,
-    reserve: Infinity,
-    reload: 2.4,
+    fireRate: 545,
     recoil: 0.012,
-    sound: "deagle",
-    reloadSound: "deagleReload",
+    mag: 30,
+    magazineSize: 30,
+    reserve: 180,
+    reload: 2.5,
+    reloadTime: 2.5,
+    range: 120,
+    bulletSpeed: 260,
+    sound: "assault",
+    soundFire: "assault",
+    reloadSound: "assaultReload",
+    soundReload: "assaultReload",
+    auto: true,
+    scoped: false,
+  },
+  AssaultRifle_2: {
+    slot: "primary",
+    name: "Assault Rifle 2",
+    model: "AssaultRifle_2",
+    damage: 30,
+    fireDelay: 130,
+    fireRate: 480,
+    recoil: 0.013,
+    mag: 30,
+    magazineSize: 30,
+    reserve: 180,
+    reload: 2.7,
+    reloadTime: 2.7,
+    range: 125,
+    bulletSpeed: 270,
+    sound: "assault",
+    soundFire: "assault",
+    reloadSound: "assaultReload",
+    soundReload: "assaultReload",
+    auto: true,
+    scoped: false,
+  },
+  AssaultRifle_3: {
+    slot: "primary",
+    name: "Assault Rifle 3",
+    model: "AssaultRifle_3",
+    damage: 38,
+    fireDelay: 190,
+    fireRate: 360,
+    recoil: 0.018,
+    mag: 28,
+    magazineSize: 28,
+    reserve: 168,
+    reload: 2.9,
+    reloadTime: 2.9,
+    range: 135,
+    bulletSpeed: 285,
+    sound: "assault",
+    soundFire: "assault",
+    reloadSound: "assaultReload",
+    soundReload: "assaultReload",
+    auto: true,
+    scoped: true,
+  },
+  Bullpup_1: {
+    slot: "primary",
+    name: "Bullpup 1",
+    model: "Bullpup_1",
+    damage: 30,
+    fireDelay: 120,
+    fireRate: 500,
+    recoil: 0.007,
+    mag: 25,
+    magazineSize: 25,
+    reserve: 175,
+    reload: 2.6,
+    reloadTime: 2.6,
+    range: 140,
+    bulletSpeed: 300,
+    sound: "bullpup",
+    soundFire: "bullpup",
+    reloadSound: "bullpupReload",
+    soundReload: "bullpupReload",
+    auto: true,
+    scoped: true,
+  },
+  Bullpup_2: {
+    slot: "primary",
+    name: "Bullpup 2",
+    model: "Bullpup_2",
+    damage: 32,
+    fireDelay: 135,
+    fireRate: 440,
+    recoil: 0.008,
+    mag: 25,
+    magazineSize: 25,
+    reserve: 175,
+    reload: 2.7,
+    reloadTime: 2.7,
+    range: 145,
+    bulletSpeed: 310,
+    sound: "bullpup",
+    soundFire: "bullpup",
+    reloadSound: "bullpupReload",
+    soundReload: "bullpupReload",
+    auto: true,
+    scoped: true,
+  },
+  Pistol_1: {
+    slot: "secondary",
+    name: "Pistol 1",
+    model: "Pistol_1",
+    damage: 14,
+    fireDelay: 200,
+    fireRate: 300,
+    recoil: 0.002,
+    mag: 15,
+    magazineSize: 15,
+    reserve: 90,
+    reload: 1.6,
+    reloadTime: 1.6,
+    range: 70,
+    bulletSpeed: 200,
+    sound: "pistol",
+    soundFire: "pistol",
+    reloadSound: "pistolReload",
+    soundReload: "pistolReload",
+    auto: false,
+    scoped: false,
+  },
+  Pistol_2: {
+    slot: "secondary",
+    name: "Pistol 2",
+    model: "Pistol_2",
+    damage: 16,
+    fireDelay: 190,
+    fireRate: 315,
+    recoil: 0.0025,
+    mag: 15,
+    magazineSize: 15,
+    reserve: 90,
+    reload: 1.7,
+    reloadTime: 1.7,
+    range: 72,
+    bulletSpeed: 205,
+    sound: "pistol",
+    soundFire: "pistol",
+    reloadSound: "pistolReload",
+    soundReload: "pistolReload",
+    auto: false,
+    scoped: false,
+  },
+  Pistol_3: {
+    slot: "secondary",
+    name: "Pistol 3",
+    model: "Pistol_3",
+    damage: 18,
+    fireDelay: 210,
+    fireRate: 285,
+    recoil: 0.003,
+    mag: 14,
+    magazineSize: 14,
+    reserve: 84,
+    reload: 1.9,
+    reloadTime: 1.9,
+    range: 75,
+    bulletSpeed: 210,
+    sound: "pistol",
+    soundFire: "pistol",
+    reloadSound: "pistolReload",
+    soundReload: "pistolReload",
+    auto: false,
+    scoped: false,
+  },
+  Pistol_4: {
+    slot: "secondary",
+    name: "Pistol 4",
+    model: "Pistol_4",
+    damage: 20,
+    fireDelay: 230,
+    fireRate: 260,
+    recoil: 0.0035,
+    mag: 12,
+    magazineSize: 12,
+    reserve: 72,
+    reload: 2.0,
+    reloadTime: 2.0,
+    range: 78,
+    bulletSpeed: 215,
+    sound: "pistol",
+    soundFire: "pistol",
+    reloadSound: "pistolReload",
+    soundReload: "pistolReload",
+    auto: false,
+    scoped: false,
+  },
+  Pistol_5: {
+    slot: "secondary",
+    name: "Pistol 5",
+    model: "Pistol_5",
+    damage: 22,
+    fireDelay: 240,
+    fireRate: 250,
+    recoil: 0.004,
+    mag: 12,
+    magazineSize: 12,
+    reserve: 72,
+    reload: 2.0,
+    reloadTime: 2.0,
+    range: 80,
+    bulletSpeed: 220,
+    sound: "pistol",
+    soundFire: "pistol",
+    reloadSound: "pistolReload",
+    soundReload: "pistolReload",
+    auto: false,
+    scoped: false,
+  },
+  Pistol_6: {
+    slot: "secondary",
+    name: "Pistol 6",
+    model: "Pistol_6",
+    damage: 24,
+    fireDelay: 260,
+    fireRate: 230,
+    recoil: 0.0045,
+    mag: 10,
+    magazineSize: 10,
+    reserve: 60,
+    reload: 2.1,
+    reloadTime: 2.1,
+    range: 82,
+    bulletSpeed: 225,
+    sound: "pistol",
+    soundFire: "pistol",
+    reloadSound: "pistolReload",
+    soundReload: "pistolReload",
+    auto: false,
+    scoped: false,
+  },
+  Revolver_1: {
+    slot: "secondary",
+    name: "Revolver 1",
+    model: "Revolver_1",
+    damage: 60,
+    fireDelay: 550,
+    fireRate: 140,
+    recoil: 0.015,
+    mag: 6,
+    magazineSize: 6,
+    reserve: 36,
+    reload: 2.8,
+    reloadTime: 2.8,
+    range: 90,
+    bulletSpeed: 240,
+    sound: "revolver",
+    soundFire: "revolver",
+    reloadSound: "revolverReload",
+    soundReload: "revolverReload",
+    auto: false,
+    scoped: false,
+  },
+  Revolver_2: {
+    slot: "secondary",
+    name: "Revolver 2",
+    model: "Revolver_2",
+    damage: 70,
+    fireDelay: 620,
+    fireRate: 120,
+    recoil: 0.017,
+    mag: 6,
+    magazineSize: 6,
+    reserve: 30,
+    reload: 3.0,
+    reloadTime: 3.0,
+    range: 95,
+    bulletSpeed: 245,
+    sound: "revolver",
+    soundFire: "revolver",
+    reloadSound: "revolverReload",
+    soundReload: "revolverReload",
+    auto: false,
+    scoped: false,
+  },
+  Revolver_3: {
+    slot: "secondary",
+    name: "Revolver 3",
+    model: "Revolver_3",
+    damage: 80,
+    fireDelay: 700,
+    fireRate: 100,
+    recoil: 0.019,
+    mag: 6,
+    magazineSize: 6,
+    reserve: 24,
+    reload: 3.2,
+    reloadTime: 3.2,
+    range: 100,
+    bulletSpeed: 250,
+    sound: "revolver",
+    soundFire: "revolver",
+    reloadSound: "revolverReload",
+    soundReload: "revolverReload",
+    auto: false,
+    scoped: false,
   },
   knife: {
     slot: "melee",
     name: "Knife",
     damage: 50,
     fireDelay: 700,
+    fireRate: 85,
     mag: 1,
+    magazineSize: 1,
     reserve: 0,
     reload: 0,
+    reloadTime: 0,
     recoil: 0,
+    range: 2.5,
+    bulletSpeed: 0,
     sound: null,
+    reloadSound: null,
+    auto: false,
+    scoped: false,
   },
 };
 function applyScope(state) {
-  const applies = player.ammo.weaponKey === "awp";
+  const def = weaponDefs[player.ammo.weaponKey];
+  const applies = !!def?.scoped;
   if (!applies) {
     scoped = false;
     scopeOverlay.style.opacity = "0";
